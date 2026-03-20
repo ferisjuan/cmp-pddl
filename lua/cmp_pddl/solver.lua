@@ -149,6 +149,71 @@ local function set_buf_lines(buf, lines)
 	vim.bo[buf].modifiable = false
 end
 
+-- Apply syntax highlighting to the result buffer
+local function apply_highlights(buf)
+	vim.schedule(function()
+		if not vim.api.nvim_buf_is_valid(buf) then
+			return
+		end
+
+		-- Define highlight groups
+		vim.api.nvim_set_hl(0, "PddlTitle", { fg = "#7aa2f7", bold = true })
+		vim.api.nvim_set_hl(0, "PddlSuccess", { fg = "#9ece6a", bold = true })
+		vim.api.nvim_set_hl(0, "PddlError", { fg = "#f7768e", bold = true })
+		vim.api.nvim_set_hl(0, "PddlStepNumber", { fg = "#bb9af7", bold = true })
+		vim.api.nvim_set_hl(0, "PddlAction", { fg = "#7dcfff" })
+		vim.api.nvim_set_hl(0, "PddlMeta", { fg = "#565f89", italic = true })
+		vim.api.nvim_set_hl(0, "PddlBorder", { fg = "#3b4261" })
+		vim.api.nvim_set_hl(0, "PddlArrow", { fg = "#ff9e64" })
+
+		local ns = vim.api.nvim_create_namespace("pddl_plan")
+		vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+
+		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+		for i, line in ipairs(lines) do
+			local lnum = i - 1
+
+			-- Title and borders
+			if line:match("^╔") or line:match("^╚") or line:match("^║") then
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlBorder", lnum, 0, -1)
+			end
+
+			-- Success/error messages
+			if line:match("✓") then
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlSuccess", lnum, 0, -1)
+			elseif line:match("✗") then
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlError", lnum, 0, -1)
+			end
+
+			-- Step numbers and arrows
+			local step_start, step_end = line:find("%s+%d+%.%s+")
+			if step_start then
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlStepNumber", lnum, step_start - 1, step_end)
+				-- Highlight the action after the number
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlAction", lnum, step_end, -1)
+			end
+
+			-- Arrows and flow indicators
+			if line:match("↓") or line:match("→") or line:match("├") or line:match("└") then
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlArrow", lnum, 0, -1)
+			end
+
+			-- Metadata (Server, Planner, Cost)
+			if line:match("Server") or line:match("Planner") or line:match("Cost") or line:match("Steps") then
+				local colon_pos = line:find(":")
+				if colon_pos then
+					vim.api.nvim_buf_add_highlight(buf, ns, "PddlMeta", lnum, 0, colon_pos)
+				end
+			end
+
+			-- Headers
+			if line:match("PDDL Plan") or line:match("═") then
+				vim.api.nvim_buf_add_highlight(buf, ns, "PddlTitle", lnum, 0, -1)
+			end
+		end
+	end)
+end
+
 local function ensure_visible(buf, height)
 	for _, w in ipairs(vim.api.nvim_list_wins()) do
 		if vim.api.nvim_win_get_buf(w) == buf then
@@ -166,18 +231,26 @@ local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧",
 
 local function loading_lines(server, planner, attempt, max, message)
 	local frame = spinner_frames[(attempt % #spinner_frames) + 1]
-	local bar_width = 20
+	local bar_width = 30
 	local filled = math.floor((attempt / max) * bar_width)
-	local bar = string.rep("█", filled) .. string.rep("░", bar_width - filled)
+	local empty = bar_width - filled
+	local bar = string.rep("█", filled) .. string.rep("░", empty)
+	local percent = math.floor((attempt / max) * 100)
 
 	return {
 		"",
-		"  " .. frame .. "  " .. message,
-		"",
-		"  Server  : " .. server,
-		"  Planner : " .. planner,
-		"",
-		"  Progress  [" .. bar .. "]  " .. attempt .. "/" .. max,
+		"╔════════════════════════════════════════════════════════════════╗",
+		"║                                                                ║",
+		"║  " .. frame .. "  " .. message .. string.rep(" ", 58 - #message) .. "║",
+		"║                                                                ║",
+		"╠════════════════════════════════════════════════════════════════╣",
+		"║                                                                ║",
+		"║  Server  : " .. server .. string.rep(" ", 50 - #server) .. "║",
+		"║  Planner : " .. planner .. string.rep(" ", 50 - #planner) .. "║",
+		"║                                                                ║",
+		"║  [" .. bar .. "]  " .. percent .. "%  ║",
+		"║                                                                ║",
+		"╚════════════════════════════════════════════════════════════════╝",
 		"",
 		"  Press q to cancel",
 	}
@@ -185,14 +258,45 @@ end
 
 -- ─── Plan renderer ────────────────────────────────────────────────────────────
 
-local function render_result(data, server, planner, buf)
+-- Save plan to file
+local function save_plan_to_file(steps, domain_path, problem_path)
+	if not domain_path or domain_path == "" then
+		return nil, "No domain path provided"
+	end
+
+	-- Derive plan filename from domain/problem
+	-- E.g., domain.pddl + problem.pddl -> domain_problem_plan.pddl
+	local domain_name = vim.fn.fnamemodify(domain_path, ":t:r") -- filename without extension
+	local problem_name = problem_path and vim.fn.fnamemodify(problem_path, ":t:r") or "problem"
+	local dir = vim.fn.fnamemodify(domain_path, ":h")
+
+	local plan_filename = domain_name .. "_" .. problem_name .. "_plan.txt"
+	local plan_path = dir .. "/" .. plan_filename
+
+	-- Write plan to file
+	local content = {}
+	for i, step in ipairs(steps) do
+		table.insert(content, string.format("%d. %s", i, step))
+	end
+
+	local f = io.open(plan_path, "w")
+	if not f then
+		return nil, "Could not write to " .. plan_path
+	end
+
+	f:write(table.concat(content, "\n"))
+	f:write("\n")
+	f:close()
+
+	return plan_path, nil
+end
+
+local function render_result(data, server, planner, buf, domain_path, problem_path)
 	local lines = {
-		"  ============================================================",
-		"  PDDL Plan Result",
-		"  ============================================================",
 		"",
-		"  Server  : " .. server,
-		"  Planner : " .. planner,
+		"╔════════════════════════════════════════════════════════════════╗",
+		"║                        PDDL Plan Result                        ║",
+		"╚════════════════════════════════════════════════════════════════╝",
 		"",
 	}
 
@@ -200,87 +304,119 @@ local function render_result(data, server, planner, buf)
 
 	if status == "ok" then
 		local result = data.result or {}
-		-- API response structure:
-		--   result.output.plan   = plan as newline-separated string e.g. "(pick-up a)\n(put-down a)"
-		--   result.stdout        = planner log output
-		--   result.stderr        = planner stderr
-
 		local output = type(result.output) == "table" and result.output or {}
-		local plan_str = output.plan or ""
+		local plan_str = type(output.plan) == "string" and output.plan or ""
 
-		-- Parse the plan string into steps — filter blank lines
+		-- Parse the plan string into steps
 		local steps = {}
 		for _, line in ipairs(vim.split(plan_str, "\n", { plain = true })) do
 			local trimmed = line:match("^%s*(.-)%s*$")
-			if trimmed ~= "" then
+			if trimmed and trimmed ~= "" then
 				table.insert(steps, trimmed)
 			end
 		end
 
-		if #steps == 0 then
-			table.insert(lines, "  ✓  Plan found — goal already satisfied (0 steps)")
-		else
-			table.insert(lines, string.format("  ✓  Plan found — %d step%s", #steps, #steps == 1 and "" or "s"))
-			table.insert(lines, "")
-			table.insert(lines, "  ----------------------------------------------------")
-			for i, step in ipairs(steps) do
-				table.insert(lines, string.format("  %3d.  %s", i, step))
-			end
-			table.insert(lines, "  ----------------------------------------------------")
-		end
-
-		-- Cost from stdout if present
+		-- Extract cost from stdout
 		local stdout = result.stdout or ""
 		local cost = stdout:match("Plan found with cost: ([%d%.]+)")
+
+		-- Header info
+		table.insert(lines, "  📋 Server   : " .. server)
+		table.insert(lines, "  🤖 Planner  : " .. planner)
+		if #steps > 0 then
+			table.insert(lines, "  📊 Steps    : " .. #steps)
+		end
 		if cost then
+			table.insert(lines, "  💰 Cost     : " .. cost)
+		end
+		table.insert(lines, "")
+
+		if #steps == 0 then
+			table.insert(lines, "  ✓  Goal already satisfied — no actions needed!")
 			table.insert(lines, "")
-			table.insert(lines, "  Cost : " .. cost)
+		else
+			table.insert(lines, "  ✓  Plan found successfully!")
+			table.insert(lines, "")
+
+			-- Save plan to file
+			local plan_path, save_err = save_plan_to_file(steps, domain_path, problem_path)
+			if plan_path then
+				table.insert(lines, "  💾 Saved to : " .. plan_path)
+				table.insert(lines, "")
+			elseif save_err then
+				table.insert(lines, "  ⚠  Could not save plan: " .. save_err)
+				table.insert(lines, "")
+			end
+
+			table.insert(lines, "  ┌─────────────────────────────────────────────────────────┐")
+
+			for i, step in ipairs(steps) do
+				if i == 1 then
+					table.insert(lines, "  │  START")
+				end
+				table.insert(lines, "  │     ↓")
+				table.insert(lines, string.format("  │  %2d. %s", i, step))
+			end
+
+			table.insert(lines, "  │     ↓")
+			table.insert(lines, "  │  🎯 GOAL")
+			table.insert(lines, "  └─────────────────────────────────────────────────────────┘")
+			table.insert(lines, "")
 		end
 
-		-- Planner stdout log
+		-- Show planner log if verbose
 		if stdout ~= "" then
-			table.insert(lines, "")
-			table.insert(lines, "  -- Planner log -------------------------------------")
+			table.insert(lines, "  ─── Planner Output ─────────────────────────────────────────")
 			for _, l in ipairs(vim.split(stdout, "\n", { plain = true })) do
 				local trimmed = l:match("^%s*(.-)%s*$")
-				if trimmed ~= "" then
+				if trimmed and trimmed ~= "" then
 					table.insert(lines, "  " .. trimmed)
 				end
 			end
+			table.insert(lines, "  ────────────────────────────────────────────────────────────")
 		end
 	else
-		table.insert(lines, "  ✗  No solution  (status: " .. status .. ")")
+		-- Error case
+		table.insert(lines, "  📋 Server   : " .. server)
+		table.insert(lines, "  🤖 Planner  : " .. planner)
 		table.insert(lines, "")
+		table.insert(lines, "  ✗  No solution found (status: " .. status .. ")")
+		table.insert(lines, "")
+
 		local result = data.result or {}
 		local output = type(result.output) == "table" and result.output or {}
 		local detail = result.stderr or output.plan or result.stdout or data.error or ""
 		if detail ~= "" then
-			table.insert(lines, "  -- Planner output ----------------------------------")
+			table.insert(lines, "  ─── Error Details ──────────────────────────────────────────")
 			for _, l in ipairs(vim.split(tostring(detail), "\n", { plain = true })) do
 				local trimmed = l:match("^%s*(.-)%s*$")
-				if trimmed ~= "" then
+				if trimmed and trimmed ~= "" then
 					table.insert(lines, "  " .. trimmed)
 				end
 			end
+			table.insert(lines, "  ────────────────────────────────────────────────────────────")
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "  Press q to close")
+	table.insert(lines, "  Press q to close this buffer")
+	table.insert(lines, "")
 
 	set_buf_lines(buf, lines)
-	ensure_visible(buf, math.min(#lines + 2, 25))
+	apply_highlights(buf)
+	ensure_visible(buf, math.min(#lines + 2, 30))
 end
 
 -- ─── Polling ──────────────────────────────────────────────────────────────────
 
-local function poll(poll_url, planner, server, buf, attempt, max)
+local function poll(poll_url, planner, server, buf, attempt, max, domain_path, problem_path)
 	attempt = attempt or 1
 
 	-- Update loading state in the buffer
 	vim.schedule(function()
 		set_buf_lines(buf, loading_lines(server, planner, attempt, max, "Solving... waiting for plan"))
-		ensure_visible(buf, 12)
+		apply_highlights(buf)
+		ensure_visible(buf, 17)
 	end)
 
 	if attempt > max then
@@ -291,6 +427,7 @@ local function poll(poll_url, planner, server, buf, attempt, max)
 				"  Try a faster planner or increase the timeout.",
 				"",
 			})
+			apply_highlights(buf)
 		end)
 		return
 	end
@@ -300,6 +437,7 @@ local function poll(poll_url, planner, server, buf, attempt, max)
 			vim.schedule(function()
 				if err then
 					set_buf_lines(buf, { "", "  ✗  Poll error: " .. err, "" })
+					apply_highlights(buf)
 					return
 				end
 
@@ -311,15 +449,16 @@ local function poll(poll_url, planner, server, buf, attempt, max)
 						"  URL: " .. poll_url,
 						"",
 					})
+					apply_highlights(buf)
 					return
 				end
 
 				local status = (data.status or ""):lower()
 				if status == "ok" or status == "error" then
-					render_result(data, server, planner, buf)
+					render_result(data, server, planner, buf, domain_path, problem_path)
 				else
 					-- Still pending — recurse
-					poll(poll_url, planner, server, buf, attempt + 1, max)
+					poll(poll_url, planner, server, buf, attempt + 1, max, domain_path, problem_path)
 				end
 			end)
 		end)
@@ -328,7 +467,7 @@ end
 
 -- ─── Public API ───────────────────────────────────────────────────────────────
 
-function M.solve(server, planner, domain, problem)
+function M.solve(server, planner, domain, problem, domain_path, problem_path)
 	set_last(server, planner)
 
 	local title = "PDDL-Plan[" .. planner .. "]"
@@ -338,12 +477,14 @@ function M.solve(server, planner, domain, problem)
 
 	-- Show loading state immediately
 	set_buf_lines(buf, loading_lines(server, planner, 0, 30, "Submitting job..."))
-	ensure_visible(buf, 12)
+	apply_highlights(buf)
+	ensure_visible(buf, 17)
 
 	http_post(url, payload, function(body, err)
 		vim.schedule(function()
 			if err then
 				set_buf_lines(buf, { "", "  ✗  Submission failed: " .. err, "" })
+				apply_highlights(buf)
 				return
 			end
 
@@ -355,6 +496,7 @@ function M.solve(server, planner, domain, problem)
 					"  URL: " .. url,
 					"",
 				})
+				apply_highlights(buf)
 				return
 			end
 
@@ -364,10 +506,11 @@ function M.solve(server, planner, domain, problem)
 			if poll_path then
 				local poll_url = server .. poll_path
 				set_buf_lines(buf, loading_lines(server, planner, 1, 30, "Job queued — polling for result..."))
-				poll(poll_url, planner, server, buf, 1, 30)
+				apply_highlights(buf)
+				poll(poll_url, planner, server, buf, 1, 30, domain_path, problem_path)
 			else
 				-- Immediate result (some servers/planners return synchronously)
-				render_result(data, server, planner, buf)
+				render_result(data, server, planner, buf, domain_path, problem_path)
 			end
 		end)
 	end)

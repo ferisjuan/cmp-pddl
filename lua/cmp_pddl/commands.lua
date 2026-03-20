@@ -46,6 +46,10 @@ function M.setup()
 				return
 			end
 
+			-- Get file paths
+			local domain_path = vim.api.nvim_buf_get_name(domain_buf)
+			local problem_path = vim.api.nvim_buf_get_name(problem_buf)
+
 			local d_text = table.concat(vim.api.nvim_buf_get_lines(domain_buf, 0, -1, false), "\n")
 			local p_text = table.concat(vim.api.nvim_buf_get_lines(problem_buf, 0, -1, false), "\n")
 
@@ -78,7 +82,7 @@ function M.setup()
 					if not planner then
 						return
 					end
-					solver.solve(server, planner, domain.raw, problem.raw)
+					solver.solve(server, planner, domain.raw, problem.raw, domain_path, problem_path)
 				end)
 			end)
 		end)
