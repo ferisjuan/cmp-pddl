@@ -200,21 +200,25 @@ local function render_result(data, server, planner, buf)
 
 	if status == "ok" then
 		local result = data.result or {}
-		local plan = result.plan or {}
+		-- API response structure:
+		--   result.output.plan   = plan as newline-separated string e.g. "(pick-up a)\n(put-down a)"
+		--   result.stdout        = planner log output
+		--   result.stderr        = planner stderr
 
+		local output = type(result.output) == "table" and result.output or {}
+		local plan_str = output.plan or ""
+
+		-- Parse the plan string into steps — filter blank lines
 		local steps = {}
-		for _, step in ipairs(plan) do
-			if type(step) == "string" then
-				table.insert(steps, step)
-			elseif type(step) == "table" then
-				local name = step.name or step.action or vim.inspect(step)
-				local time = step.time and string.format("[%6.3f] ", tonumber(step.time)) or ""
-				table.insert(steps, time .. name)
+		for _, line in ipairs(vim.split(plan_str, "\n", { plain = true })) do
+			local trimmed = line:match("^%s*(.-)%s*$")
+			if trimmed ~= "" then
+				table.insert(steps, trimmed)
 			end
 		end
 
 		if #steps == 0 then
-			table.insert(lines, "  ✓  Goal already satisfied — empty plan")
+			table.insert(lines, "  ✓  Plan found — goal already satisfied (0 steps)")
 		else
 			table.insert(lines, string.format("  ✓  Plan found — %d step%s", #steps, #steps == 1 and "" or "s"))
 			table.insert(lines, "")
@@ -225,32 +229,38 @@ local function render_result(data, server, planner, buf)
 			table.insert(lines, "  ----------------------------------------------------")
 		end
 
-		if result.cost then
+		-- Cost from stdout if present
+		local stdout = result.stdout or ""
+		local cost = stdout:match("Plan found with cost: ([%d%.]+)")
+		if cost then
 			table.insert(lines, "")
-			table.insert(lines, "  Cost     : " .. tostring(result.cost))
+			table.insert(lines, "  Cost : " .. cost)
 		end
-		if result.makespan then
-			table.insert(lines, "  Makespan : " .. tostring(result.makespan))
-		end
-		if result.output and result.output ~= "" then
+
+		-- Planner stdout log
+		if stdout ~= "" then
 			table.insert(lines, "")
-			table.insert(lines, "  -- Planner output ----------------------------------")
-			for _, l in ipairs(vim.split(tostring(result.output), "\n", { plain = true })) do
-				table.insert(lines, "  " .. l)
+			table.insert(lines, "  -- Planner log -------------------------------------")
+			for _, l in ipairs(vim.split(stdout, "\n", { plain = true })) do
+				local trimmed = l:match("^%s*(.-)%s*$")
+				if trimmed ~= "" then
+					table.insert(lines, "  " .. trimmed)
+				end
 			end
 		end
 	else
 		table.insert(lines, "  ✗  No solution  (status: " .. status .. ")")
 		table.insert(lines, "")
-		local detail = nil
-		if type(data.result) == "table" then
-			detail = data.result.error or data.result.stderr or data.result.output
-		end
-		detail = detail or data.error
-		if detail and detail ~= "" then
+		local result = data.result or {}
+		local output = type(result.output) == "table" and result.output or {}
+		local detail = result.stderr or output.plan or result.stdout or data.error or ""
+		if detail ~= "" then
 			table.insert(lines, "  -- Planner output ----------------------------------")
 			for _, l in ipairs(vim.split(tostring(detail), "\n", { plain = true })) do
-				table.insert(lines, "  " .. l)
+				local trimmed = l:match("^%s*(.-)%s*$")
+				if trimmed ~= "" then
+					table.insert(lines, "  " .. trimmed)
+				end
 			end
 		end
 	end
