@@ -292,10 +292,10 @@ local function save_plan_to_file(steps, domain_path, problem_path)
 	local plan_filename = domain_name .. "_" .. problem_name .. "_plan.pddl"
 	local plan_path = dir .. "/" .. plan_filename
 
-	-- Write plan to file
+	-- Write plan to file: number at col 0, then N spaces before the action
 	local content = {}
 	for i, step in ipairs(steps) do
-		table.insert(content, string.format("%d. %s", i, format_step(step)))
+		table.insert(content, string.format("%d. %s%s", i, string.rep(" ", i), format_step(step)))
 	end
 
 	local f = io.open(plan_path, "w")

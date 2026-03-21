@@ -57,6 +57,21 @@ syntax match  pddlNumber      /\<\d\+\(\.\d*\)\?\>/
 " ── Parentheses ───────────────────────────────────────────────────────────────
 syntax match  pddlParen       /[()]/
 
+" ── Plan actions (blocksworld & common) ──────────────────────────────────────
+" STACK / UNSTACK: two shades of blue
+syntax keyword pddlPlanStack   stack
+syntax keyword pddlPlanUnstack unstack
+
+" PICK-UP / PUT-DOWN: two shades of amber
+syntax keyword pddlPlanPickup  pick-up
+syntax keyword pddlPlanPutdown put-down
+
+" ── Colon-prefixed keywords (:action :parameters etc.) ───────────────────────
+syntax match  pddlColon        /:\w\+[-\w]*/
+
+" ── International / non-ASCII characters (lint as error) ─────────────────────
+syntax match  pddlIntlError    /[^\x00-\x7F]/
+
 " ── Highlight links ───────────────────────────────────────────────────────────
 highlight default link pddlKeyword     Keyword
 highlight default link pddlSection     Structure
@@ -71,5 +86,17 @@ highlight default link pddlTypeOf      Type
 highlight default link pddlComment     Comment
 highlight default link pddlNumber      Number
 highlight default link pddlParen       Delimiter
+highlight default link pddlIntlError   Error
+
+" STACK (bright blue) / UNSTACK (steel blue)
+highlight default pddlPlanStack   guifg=#89DDFF ctermfg=117
+highlight default pddlPlanUnstack guifg=#61AFEF ctermfg=75
+
+" PICK-UP (light amber) / PUT-DOWN (deep amber)
+highlight default pddlPlanPickup  guifg=#FFCB6B ctermfg=222
+highlight default pddlPlanPutdown guifg=#C78D3A ctermfg=172
+
+" :word (violet — distinct from white)
+highlight default pddlColon       guifg=#C678DD ctermfg=176
 
 let b:current_syntax = "pddl"
