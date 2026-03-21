@@ -295,7 +295,8 @@ local function save_plan_to_file(steps, domain_path, problem_path)
 	-- Write plan to file
 	local content = {}
 	for i, step in ipairs(steps) do
-		table.insert(content, string.format("%d. %s", i, format_step(step)))
+		local indent = i == 1 and "" or "  "
+		table.insert(content, string.format("%s%d. %s", indent, i, format_step(step)))
 	end
 
 	local f = io.open(plan_path, "w")

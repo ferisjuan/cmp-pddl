@@ -57,6 +57,10 @@ syntax match  pddlNumber      /\<\d\+\(\.\d*\)\?\>/
 " ── Parentheses ───────────────────────────────────────────────────────────────
 syntax match  pddlParen       /[()]/
 
+" ── Plan actions (blocksworld & common) ──────────────────────────────────────
+syntax keyword pddlPlanStack   UNSTACK STACK unstack stack
+syntax keyword pddlPlanPickup  PICK-UP PUT-DOWN pick-up put-down
+
 " ── Highlight links ───────────────────────────────────────────────────────────
 highlight default link pddlKeyword     Keyword
 highlight default link pddlSection     Structure
@@ -71,5 +75,7 @@ highlight default link pddlTypeOf      Type
 highlight default link pddlComment     Comment
 highlight default link pddlNumber      Number
 highlight default link pddlParen       Delimiter
+highlight default pddlPlanStack  guifg=#61AFEF ctermfg=75
+highlight default pddlPlanPickup guifg=#E5C07B ctermfg=179
 
 let b:current_syntax = "pddl"
